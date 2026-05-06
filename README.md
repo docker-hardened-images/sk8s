@@ -128,6 +128,10 @@ cluster, err := sk8s.GetCluster(t, ctx,
 | `PauseImage` | Custom pause image |
 | `WithCustomizers` passes additional [Testcontainers `ContainerCustomizer`](https://golang.testcontainers.org/) options directly to the k3s container (e.g. extra environment variables or bind mounts). |
 
+## Reference
+
+See [API Reference](docs/reference.md)
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
