@@ -1,4 +1,4 @@
-package k8sv2
+package sk8s
 
 import (
 	"gopkg.in/yaml.v3"
