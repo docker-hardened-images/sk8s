@@ -109,6 +109,9 @@ func GetCluster(t *testing.T, ctx context.Context, opts ...CustomizeClusterOptio
 		return nil, err
 	}
 	customize := []tc.ContainerCustomizer{
+		tc.WithLabels(map[string]string{
+			"app": "sk8s",
+		}),
 		tc.WithFiles(
 			tc.ContainerFile{
 				Reader:            bytes.NewReader(mConfig),
