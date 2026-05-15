@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -193,7 +192,7 @@ func (c *TestCluster) WaitForJob(ctx context.Context, namespace string, jobName 
 }
 
 func (c *TestCluster) logFailedJob(ctx context.Context, namespace string, jobName string) {
-	logger := log.Default()
+	logger := LoggerFromContext(ctx)
 	commands := [][]string{
 		{"kubectl", "describe", "job", jobName, "-n", namespace},
 		{"kubectl", "get", "pods", "-n", namespace, "-l", "job-name=" + jobName, "-o", "wide"},
@@ -244,8 +243,28 @@ func (c *TestCluster) WaitForDeployment(ctx context.Context, namespace string, d
 	return c.WaitFor(ctx, fn)
 }
 
+// WaitForDeploymentReplicaCount blocks until the Deployment's status reflects the desired replica count.
+// For want > 0 it also requires ReadyReplicas to match. For want == 0 it returns when Replicas is zero
+// (scaled-down), without requiring ready pods.
+func (c *TestCluster) WaitForDeploymentReplicaCount(ctx context.Context, namespace, deploymentName string, want int32) error {
+	fn := func(ctx context.Context) (bool, error) {
+		dep, err := c.Client().AppsV1().Deployments(namespace).Get(ctx, deploymentName, metav1.GetOptions{})
+		if err != nil {
+			return false, err
+		}
+		if dep.Status.Replicas != want {
+			return false, nil
+		}
+		if want == 0 {
+			return true, nil
+		}
+		return dep.Status.ReadyReplicas == want, nil
+	}
+	return c.WaitFor(ctx, fn)
+}
+
 func (c *TestCluster) logNamespaceResources(ctx context.Context, namespace string) {
-	logger := log.Default()
+	logger := LoggerFromContext(ctx)
 	logger.Printf("Deployment still not ready. Checking resources in namespace %s...", namespace)
 	exitCode, reader, err := c.cluster.Exec(ctx, []string{
 		"kubectl", "get", "all", "-n", namespace,
@@ -271,7 +290,7 @@ func (c *TestCluster) logNamespaceResources(ctx context.Context, namespace strin
 
 // logUnhealthyPods describes pods that are not in a healthy state
 func (c *TestCluster) logUnhealthyPods(ctx context.Context, namespace string) {
-	logger := log.Default()
+	logger := LoggerFromContext(ctx)
 
 	pods, err := c.Client().CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -402,7 +421,7 @@ func (c *TestCluster) WaitForStatefulSet(ctx context.Context, namespace string, 
 		fmt.Fprintf(w, "%s\t%d\t%d\t%d", sts.Name, int(status.Replicas), int(status.CurrentReplicas), int(status.ReadyReplicas))
 		err = w.Flush()
 		if err == nil {
-			logger := log.Default()
+			logger := LoggerFromContext(ctx)
 			logger.Println(builder.String())
 			builder.Reset()
 		}
@@ -521,9 +540,6 @@ func (c *TestCluster) WaitForGVR(ctx context.Context, namespace string, gvr sche
 		}
 
 		searchedValue, found, err := unstructured.NestedString(g.Object, fields...)
-		if err != nil {
-			return false, err
-		}
 		if !found {
 			return false, nil
 		}
@@ -566,9 +582,6 @@ func (c *TestCluster) WaitForGVRBool(ctx context.Context, namespace string, gvr 
 		}
 
 		searchedValue, found, err := unstructured.NestedBool(g.Object, fields...)
-		if err != nil {
-			return false, err
-		}
 		if !found {
 			return false, nil
 		}

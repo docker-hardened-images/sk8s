@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"testing"
@@ -126,7 +125,7 @@ func GetCluster(t *testing.T, ctx context.Context, opts ...CustomizeClusterOptio
 
 	provider, err := tc.NewDockerProvider()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("docker provider: %w", err)
 	}
 
 	k3sContainer, err := k3s.Run(
@@ -200,7 +199,7 @@ func (c *TestCluster) ApiExtClient(ctx context.Context) (*apiextensionsclientset
 			return nil, err
 		}
 
-		apiExtClient := apiextensionsclientset.NewForConfigOrDie(config)
+		apiExtClient, err := apiextensionsclientset.NewForConfig(config)
 		if err != nil {
 			return nil, err
 		}
@@ -266,7 +265,40 @@ func (c *TestCluster) LoadImages(ctx context.Context, images ...string) error {
 }
 
 func (c *TestCluster) LoadImagesWithPlatform(ctx context.Context, images []string, platform *ociv1.Platform) error {
-	return c.cluster.LoadImagesWithOpts(ctx, images, tc.SaveDockerImageWithPlatforms(*platform))
+	imagesTar, err := os.CreateTemp(os.TempDir(), "images*.tar")
+	if err != nil {
+		return fmt.Errorf("creating temporary images file %w", err)
+	}
+	defer func() {
+		_ = os.Remove(imagesTar.Name())
+	}()
+
+	var saveOpts []tc.SaveImageOption
+	if platform != nil {
+		saveOpts = append(saveOpts, tc.SaveDockerImageWithPlatforms(*platform))
+	}
+
+	err = c.provider.SaveImagesWithOpts(ctx, imagesTar.Name(), images, saveOpts...)
+	if err != nil {
+		return fmt.Errorf("saving images %w", err)
+	}
+
+	containerPath := "/tmp/" + filepath.Base(imagesTar.Name())
+	err = c.cluster.CopyFileToContainer(ctx, imagesTar.Name(), containerPath, 0x644)
+	if err != nil {
+		return fmt.Errorf("copying image to container %w", err)
+	}
+
+	exit, reader, err := c.cluster.Exec(ctx, []string{"ctr", "-n=k8s.io", "images", "import", "--all-platforms", containerPath})
+	if err != nil {
+		return fmt.Errorf("importing image %w", err)
+	}
+	if exit != 0 {
+		b, _ := io.ReadAll(reader)
+		return fmt.Errorf("importing image %s", string(b))
+	}
+
+	return nil
 }
 
 func (c *TestCluster) getClusterConfig(ctx context.Context) (*rest.Config, error) {
@@ -289,7 +321,7 @@ func getClusterConfig(ctx context.Context, cluster *k3s.K3sContainer) (*rest.Con
 
 // logClusterWarnings monitors cluster events and logs warnings
 func logClusterWarnings(ctx context.Context, client *kubernetes.Clientset) {
-	logger := log.Default()
+	logger := LoggerFromContext(ctx)
 
 	// Watch for events across all namespaces
 	watcher, err := client.CoreV1().Events("").Watch(ctx, metav1.ListOptions{})
@@ -345,7 +377,7 @@ func logClusterWarnings(ctx context.Context, client *kubernetes.Clientset) {
 // This function runs in the background and will continue until the context is cancelled.
 // It tracks which pods have already been logged to avoid duplicate log streaming.
 func watchAndLogPods(ctx context.Context, client *kubernetes.Clientset) {
-	logger := log.Default()
+	logger := LoggerFromContext(ctx)
 
 	// Track pods we're already logging
 	loggedPods := make(map[string]bool)
@@ -413,7 +445,7 @@ func watchAndLogPods(ctx context.Context, client *kubernetes.Clientset) {
 
 // streamPodContainerLogs streams logs from a specific container in a pod
 func streamPodContainerLogs(ctx context.Context, client *kubernetes.Clientset, namespace, podName, containerName string) {
-	logger := log.Default()
+	logger := LoggerFromContext(ctx)
 
 	logOptions := &corev1.PodLogOptions{
 		Container: containerName,
