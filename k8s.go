@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"testing"
@@ -289,7 +288,7 @@ func getClusterConfig(ctx context.Context, cluster *k3s.K3sContainer) (*rest.Con
 
 // logClusterWarnings monitors cluster events and logs warnings
 func logClusterWarnings(ctx context.Context, client *kubernetes.Clientset) {
-	logger := log.Default()
+	logger := LoggerFromContext(ctx)
 
 	// Watch for events across all namespaces
 	watcher, err := client.CoreV1().Events("").Watch(ctx, metav1.ListOptions{})
@@ -345,7 +344,7 @@ func logClusterWarnings(ctx context.Context, client *kubernetes.Clientset) {
 // This function runs in the background and will continue until the context is cancelled.
 // It tracks which pods have already been logged to avoid duplicate log streaming.
 func watchAndLogPods(ctx context.Context, client *kubernetes.Clientset) {
-	logger := log.Default()
+	logger := LoggerFromContext(ctx)
 
 	// Track pods we're already logging
 	loggedPods := make(map[string]bool)
@@ -413,7 +412,7 @@ func watchAndLogPods(ctx context.Context, client *kubernetes.Clientset) {
 
 // streamPodContainerLogs streams logs from a specific container in a pod
 func streamPodContainerLogs(ctx context.Context, client *kubernetes.Clientset, namespace, podName, containerName string) {
-	logger := log.Default()
+	logger := LoggerFromContext(ctx)
 
 	logOptions := &corev1.PodLogOptions{
 		Container: containerName,

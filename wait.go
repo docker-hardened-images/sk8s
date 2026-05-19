@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -193,7 +192,7 @@ func (c *TestCluster) WaitForJob(ctx context.Context, namespace string, jobName 
 }
 
 func (c *TestCluster) logFailedJob(ctx context.Context, namespace string, jobName string) {
-	logger := log.Default()
+	logger := LoggerFromContext(ctx)
 	commands := [][]string{
 		{"kubectl", "describe", "job", jobName, "-n", namespace},
 		{"kubectl", "get", "pods", "-n", namespace, "-l", "job-name=" + jobName, "-o", "wide"},
@@ -245,7 +244,7 @@ func (c *TestCluster) WaitForDeployment(ctx context.Context, namespace string, d
 }
 
 func (c *TestCluster) logNamespaceResources(ctx context.Context, namespace string) {
-	logger := log.Default()
+	logger := LoggerFromContext(ctx)
 	logger.Printf("Deployment still not ready. Checking resources in namespace %s...", namespace)
 	exitCode, reader, err := c.cluster.Exec(ctx, []string{
 		"kubectl", "get", "all", "-n", namespace,
@@ -271,7 +270,7 @@ func (c *TestCluster) logNamespaceResources(ctx context.Context, namespace strin
 
 // logUnhealthyPods describes pods that are not in a healthy state
 func (c *TestCluster) logUnhealthyPods(ctx context.Context, namespace string) {
-	logger := log.Default()
+	logger := LoggerFromContext(ctx)
 
 	pods, err := c.Client().CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -402,7 +401,7 @@ func (c *TestCluster) WaitForStatefulSet(ctx context.Context, namespace string, 
 		fmt.Fprintf(w, "%s\t%d\t%d\t%d", sts.Name, int(status.Replicas), int(status.CurrentReplicas), int(status.ReadyReplicas))
 		err = w.Flush()
 		if err == nil {
-			logger := log.Default()
+			logger := LoggerFromContext(ctx)
 			logger.Println(builder.String())
 			builder.Reset()
 		}
