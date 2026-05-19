@@ -247,6 +247,17 @@ func (c *TestCluster) GetPodsForDaemonSet(ctx context.Context, namespace string,
 	return podList.Items, nil
 }
 
+// ScaleDeployment sets a Deployment replica count via the scale subresource.
+func (c *TestCluster) ScaleDeployment(ctx context.Context, namespace, deploymentName string, replicas int32) error {
+	scale, err := c.Client().AppsV1().Deployments(namespace).GetScale(ctx, deploymentName, metav1.GetOptions{})
+	if err != nil {
+		return err
+	}
+	scale.Spec.Replicas = replicas
+	_, err = c.Client().AppsV1().Deployments(namespace).UpdateScale(ctx, deploymentName, scale, metav1.UpdateOptions{})
+	return err
+}
+
 func (c *TestCluster) CreateMockCert(ctx context.Context, namespace string, certName string, caCrt, tlsCret, tlsKey []byte) error {
 	certDef := &corev1.Secret{
 		TypeMeta: metav1.TypeMeta{
