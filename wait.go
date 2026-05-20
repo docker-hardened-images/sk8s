@@ -244,6 +244,26 @@ func (c *TestCluster) WaitForDeployment(ctx context.Context, namespace string, d
 	return c.WaitFor(ctx, fn)
 }
 
+// WaitForDeploymentReplicaCount blocks until the Deployment's status reflects the desired replica count.
+// For want > 0 it also requires ReadyReplicas to match. For want == 0 it returns when Replicas is zero
+// (scaled-down), without requiring ready pods.
+func (c *TestCluster) WaitForDeploymentReplicaCount(ctx context.Context, namespace, deploymentName string, want int32) error {
+	fn := func(ctx context.Context) (bool, error) {
+		dep, err := c.Client().AppsV1().Deployments(namespace).Get(ctx, deploymentName, metav1.GetOptions{})
+		if err != nil {
+			return false, err
+		}
+		if dep.Status.Replicas != want {
+			return false, nil
+		}
+		if want == 0 {
+			return true, nil
+		}
+		return dep.Status.ReadyReplicas == want, nil
+	}
+	return c.WaitFor(ctx, fn)
+}
+
 func (c *TestCluster) logNamespaceResources(ctx context.Context, namespace string) {
 	logger := log.Default()
 	logger.Printf("Deployment still not ready. Checking resources in namespace %s...", namespace)
