@@ -4,6 +4,22 @@ Thank you for your interest in contributing to the Docker Hardened Images commun
 
 > **Important:** If you make any contribution to this project you agree that it is contributed under [Apache 2.0](LICENSE.txt).
 
+## Developing and testing sk8s
+
+This section applies **to this repository** when you clone [sk8s](https://github.com/docker-hardened-images/sk8s) and work on the Go module.
+
+After pulling dependencies (`go mod download`), run tests from the repository root:
+
+```bash
+go test ./... -count=1 -v
+```
+
+**Integration tests** (pulls **k3s** via Docker; slower, needs a working daemon):
+
+```bash
+go test -tags=integration ./... -count=1 -v
+```
+
 ## How to Contribute
 
 ### 🗣️ Participate in Discussions
