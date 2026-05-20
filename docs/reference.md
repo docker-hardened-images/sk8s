@@ -66,7 +66,7 @@ func GetCluster(t *testing.T, ctx context.Context, opts ...CustomizeClusterOptio
 
 ```go
 cluster, err := sk8s.GetCluster(t, ctx,
-    sk8s.WithClusterConfig(sk8s.ClusterOptions{
+    sk8s.WithClusterConfig(sk8s.ClusterConfig{
         Disable: []string{
             "traefik",
         },
@@ -254,6 +254,7 @@ func (c *TestCluster) GetRaw(ctx context.Context, apiPath string) (string, error
 ```go
 func (c *TestCluster) CreateNamespace(ctx context.Context, namespace string) error
 func (c *TestCluster) DeleteResource(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string) error
+func (c *TestCluster) ScaleDeployment(ctx context.Context, namespace string, deploymentName string, replicas int32) error
 func (c *TestCluster) CreateMockCert(ctx context.Context, namespace string, certName string, caCrt, tlsCert, tlsKey []byte) error
 ```
 
@@ -291,6 +292,7 @@ func (c *TestCluster) WaitForPodByLabel(ctx context.Context, namespace string, l
 
 ```go
 func (c *TestCluster) WaitForDeployment(ctx context.Context, namespace string, deploymentName string) error
+func (c *TestCluster) WaitForDeploymentReplicaCount(ctx context.Context, namespace string, deploymentName string, want int32) error
 func (c *TestCluster) WaitForStatefulSet(ctx context.Context, namespace string, stsName string) error
 func (c *TestCluster) WaitForDaemonSet(ctx context.Context, namespace string, dsName string) error
 func (c *TestCluster) WaitForJob(ctx context.Context, namespace string, jobName string) error
