@@ -7,11 +7,15 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/distribution/reference"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/network"
 	ociv1 "github.com/opencontainers/image-spec/specs-go/v1"
 	tc "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
@@ -118,11 +122,33 @@ func GetCluster(t *testing.T, ctx context.Context, opts ...CustomizeClusterOptio
 				ContainerFilePath: "/etc/rancher/k3s/config.yaml",
 			},
 		),
-		tc.WithExposedPorts(
-			"2345:2345",   // delve debugger
-			"32345:32345", // delve debugger
-			"9229:9229",   // node debugger
-		),
+		tc.WithHostConfigModifier(func(hc *container.HostConfig) {
+			// TODO: Remove if/when Testcontainers supports chained config functions
+			hc.Privileged = true
+			hc.CgroupnsMode = "host"
+			hc.Tmpfs = map[string]string{
+				"/run":     "",
+				"/var/run": "",
+			}
+			hc.Mounts = []mount.Mount{}
+			// ----
+
+			debugPorts := []string{
+				"2345",  // delve debugger
+				"32345", // delve debugger
+				"9229",  // node debugger
+			}
+
+			if hc.PortBindings == nil {
+				hc.PortBindings = make(network.PortMap)
+			}
+
+			for _, p := range debugPorts {
+				hc.PortBindings[network.MustParsePort(p)] = []network.PortBinding{
+					{HostIP: netip.MustParseAddr("0.0.0.0"), HostPort: p},
+				}
+			}
+		}),
 	}
 
 	customize = append(customize, options.customizers...)
