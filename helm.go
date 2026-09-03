@@ -187,7 +187,7 @@ func (c *TestCluster) HelmSettings(ctx context.Context) (*cli.EnvSettings, error
 		repoCacheDir := filepath.Join(path, "repository")
 		pluginsDir := filepath.Join(path, "plugins")
 
-		kubeConfig, err := c.cluster.GetKubeConfig(ctx)
+		kubeConfig, err := c.getKubeConfig(ctx)
 		if err != nil {
 			return nil, err
 		}

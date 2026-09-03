@@ -201,7 +201,8 @@ func (c *TestCluster) logFailedJob(ctx context.Context, namespace string, jobNam
 	}
 
 	for _, cmd := range commands {
-		exitCode, reader, err := c.cluster.Exec(ctx, cmd)
+		p := *c.clusterProvider
+		exitCode, reader, err := p.exec(ctx, cmd)
 		if err != nil {
 			logger.Printf("Failed to run %q: %v", strings.Join(cmd, " "), err)
 			continue
@@ -267,7 +268,8 @@ func (c *TestCluster) WaitForDeploymentReplicaCount(ctx context.Context, namespa
 func (c *TestCluster) logNamespaceResources(ctx context.Context, namespace string) {
 	logger := log.Default()
 	logger.Printf("Deployment still not ready. Checking resources in namespace %s...", namespace)
-	exitCode, reader, err := c.cluster.Exec(ctx, []string{
+	p := *c.clusterProvider
+	exitCode, reader, err := p.exec(ctx, []string{
 		"kubectl", "get", "all", "-n", namespace,
 	})
 	if err != nil {
@@ -314,7 +316,8 @@ func (c *TestCluster) logUnhealthyPods(ctx context.Context, namespace string) {
 
 		if isUnhealthy {
 			logger.Printf("Describing unhealthy pod %s (phase: %s)...", pod.Name, phase)
-			exitCode, reader, err := c.cluster.Exec(ctx, []string{
+			p := *c.clusterProvider
+			exitCode, reader, err := p.exec(ctx, []string{
 				"kubectl", "describe", "pod", pod.Name, "-n", namespace,
 			})
 			if err != nil {

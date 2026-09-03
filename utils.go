@@ -8,7 +8,6 @@ import (
 	"io"
 	"time"
 
-	"github.com/testcontainers/testcontainers-go/exec"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -20,8 +19,9 @@ import (
 	"k8s.io/client-go/tools/remotecommand"
 )
 
-func (c *TestCluster) Exec(ctx context.Context, cmd []string, options ...exec.ProcessOption) (int, io.Reader, error) {
-	return c.cluster.Exec(ctx, cmd, options...)
+func (c *TestCluster) Exec(ctx context.Context, cmd []string) (int, io.Reader, error) {
+	p := *c.clusterProvider
+	return p.exec(ctx, cmd)
 }
 
 func (c *TestCluster) ExecPod(ctx context.Context, namespace string, pod string, cmd []string) (bytes.Buffer, bytes.Buffer, error) {
