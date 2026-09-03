@@ -1,0 +1,457 @@
+package sk8s
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"fmt"
+	"io"
+	"log"
+	"net/netip"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/distribution/reference"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/network"
+	ociv1 "github.com/opencontainers/image-spec/specs-go/v1"
+	tc "github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/modules/k3s"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+)
+
+const defaultImage = "rancher/k3s:v1.34.1-k3s1"
+
+var DefaultConfig = ClusterConfig{
+	APIServerArg: []string{
+		"feature-gates=ImageVolume=true",
+	},
+	Disable: []string{
+		"metrics-server",
+	},
+}
+
+type LogOptions struct {
+	clusterWarnings bool
+	podLogs         bool
+}
+
+type ClusterOptions struct {
+	image       string
+	config      ClusterConfig
+	customizers []tc.ContainerCustomizer
+	logging     *LogOptions
+}
+
+type CustomizeClusterOption func(opts *ClusterOptions) error
+
+func (opt CustomizeClusterOption) Customize(opts *ClusterOptions) error {
+	return opt(opts)
+}
+
+func WithClusterConfig(config ClusterConfig) CustomizeClusterOption {
+	return func(opts *ClusterOptions) error {
+		opts.config = config
+
+		return nil
+	}
+}
+
+func WithCustomizers(customize ...tc.ContainerCustomizer) CustomizeClusterOption {
+	return func(opts *ClusterOptions) error {
+		opts.customizers = customize
+
+		return nil
+	}
+}
+
+func WithLoggingOptions(clusterWarnings bool, podLogs bool) CustomizeClusterOption {
+	return func(opts *ClusterOptions) error {
+		opts.logging = &LogOptions{
+			clusterWarnings: clusterWarnings,
+			podLogs:         podLogs,
+		}
+
+		return nil
+	}
+}
+
+type TestK3sCluster struct {
+	TestCluster
+}
+
+type K3sClusterProvider struct {
+	opts     []CustomizeClusterOption
+	cluster  *k3s.K3sContainer
+	provider *tc.DockerProvider
+}
+
+func (p *K3sClusterProvider) Cluster() *k3s.K3sContainer {
+	return p.cluster
+}
+
+func (p K3sClusterProvider) getCluster(t *testing.T, ctx context.Context) (*TestCluster, error) {
+	options := ClusterOptions{
+		image:  defaultImage,
+		config: DefaultConfig,
+	}
+
+	for _, o := range p.opts {
+		err := o.Customize(&options)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	mConfig, err := options.config.Marshall()
+	if err != nil {
+		return nil, err
+	}
+	customize := []tc.ContainerCustomizer{
+		tc.WithLabels(map[string]string{
+			"app": "sk8s",
+		}),
+		tc.WithFiles(
+			tc.ContainerFile{
+				Reader:            bytes.NewReader(mConfig),
+				ContainerFilePath: "/etc/rancher/k3s/config.yaml",
+			},
+		),
+		tc.WithHostConfigModifier(func(hc *container.HostConfig) {
+			debugPorts := []string{
+				"2345",  // delve debugger
+				"32345", // delve debugger
+				"9229",  // node debugger
+			}
+
+			hc.Mounts = append(hc.Mounts, mount.Mount{
+				Type:   mount.TypeVolume,
+				Source: "sk8s-out-" + t.Name(),
+				Target: "/out",
+			})
+
+			if hc.PortBindings == nil {
+				hc.PortBindings = make(network.PortMap)
+			}
+
+			for _, p := range debugPorts {
+				hc.PortBindings[network.MustParsePort(p)] = []network.PortBinding{
+					{HostIP: netip.MustParseAddr("0.0.0.0"), HostPort: p},
+				}
+			}
+		}),
+		tc.WithAdditionalLifecycleHooks(tc.ContainerLifecycleHooks{
+			PreStops: []tc.ContainerHook{
+				func(ctx context.Context, ctr tc.Container) error {
+					cmd := []string{
+						"sh", "-c", "kubectl get event --all-namespaces > /out/events.log && cp -r /var/log/pods /out",
+					}
+					_, _, err := ctr.Exec(ctx, cmd)
+					if err != nil {
+						return err
+					}
+					return nil
+				},
+			},
+		}),
+	}
+
+	customize = append(customize, options.customizers...)
+
+	provider, err := tc.NewDockerProvider()
+	if err != nil {
+		return nil, err
+	}
+	p.provider = provider
+
+	k3sContainer, err := k3s.Run(
+		ctx, options.image,
+		customize...,
+	)
+	tc.CleanupContainer(t, k3sContainer)
+	if err != nil {
+		return nil, err
+	}
+	p.cluster = k3sContainer
+
+	kubeConfigYaml, err := p.getKubeConfig(ctx)
+	restcfg, err := getClusterConfig(kubeConfigYaml)
+	if err != nil {
+		return nil, err
+	}
+
+	k8s, err := kubernetes.NewForConfig(restcfg)
+	if err != nil {
+		return nil, err
+	}
+
+	if options.logging != nil && options.logging.clusterWarnings {
+		// Background goroutine to log cluster warnings
+		go logClusterWarnings(ctx, k8s)
+	}
+
+	if options.logging != nil && options.logging.podLogs {
+		// Background goroutine to watch and log all pod logs
+		go watchAndLogPods(ctx, k8s)
+	}
+
+	tmpDir := t.TempDir()
+
+	cluster := TestCluster{
+		client: k8s,
+		tmpDir: tmpDir,
+	}
+
+	return &cluster, nil
+}
+
+func (c *K3sClusterProvider) getKubeConfig(ctx context.Context) ([]byte, error) {
+	kubeConfigYaml, err := c.cluster.GetKubeConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return kubeConfigYaml, nil
+}
+
+// Use for helm chart tests
+func (c *K3sClusterProvider) loadImages(ctx context.Context, images ...string) error {
+	for _, image := range images {
+		ref, err := reference.ParseAnyReference(image)
+		if err != nil {
+			return err
+		}
+
+		digested, ok := ref.(reference.Canonical)
+		if ok {
+			// save image
+			imagesTar, err := os.CreateTemp(os.TempDir(), "images*.tar")
+			if err != nil {
+				return fmt.Errorf("creating temporary images file %w", err)
+			}
+			defer func() {
+				_ = os.Remove(imagesTar.Name())
+			}()
+
+			err = c.provider.SaveImagesWithOpts(ctx, imagesTar.Name(), []string{image})
+			if err != nil {
+				return fmt.Errorf("saving images %w", err)
+			}
+
+			containerPath := "/tmp/" + filepath.Base(imagesTar.Name())
+			err = c.cluster.CopyFileToContainer(ctx, imagesTar.Name(), containerPath, 0x644)
+			if err != nil {
+				return fmt.Errorf("copying image to container %w", err)
+			}
+
+			cmd := []string{"ctr", "-n=k8s.io", "images", "import", "--digests", "--base-name", digested.Name(), containerPath}
+
+			exit, reader, err := c.cluster.Exec(ctx, cmd)
+			if err != nil {
+				return fmt.Errorf("importing image %w", err)
+			}
+			if exit != 0 {
+				b, _ := io.ReadAll(reader)
+				return fmt.Errorf("importing image %s", string(b))
+			}
+		} else {
+			err := c.cluster.LoadImages(ctx, image)
+			if err != nil {
+				return fmt.Errorf("importing image %w", err)
+			}
+		}
+	}
+
+	// Remove temp image archives
+	_, _, _ = c.cluster.Exec(ctx, []string{"sh", "-c", "rm /tmp/images*.tar"})
+
+	return nil
+}
+
+func (c *K3sClusterProvider) loadImagesWithPlatform(ctx context.Context, images []string, platform *ociv1.Platform) error {
+	return c.cluster.LoadImagesWithOpts(ctx, images, tc.SaveDockerImageWithPlatforms(*platform))
+}
+
+func (c *K3sClusterProvider) exec(ctx context.Context, cmd []string) (int, io.Reader, error) {
+	return c.cluster.Exec(ctx, cmd)
+}
+
+func (c *K3sClusterProvider) copyFileToCluster(ctx context.Context, hostFilePath string, clusterFilePath string, fileMode int64) error {
+	return c.cluster.CopyFileToContainer(ctx, hostFilePath, clusterFilePath, 0o644)
+}
+
+// logClusterWarnings monitors cluster events and logs warnings
+func logClusterWarnings(ctx context.Context, client *kubernetes.Clientset) {
+	logger := log.Default()
+
+	// Watch for events across all namespaces
+	watcher, err := client.CoreV1().Events("").Watch(ctx, metav1.ListOptions{})
+	if err != nil {
+		logger.Printf("Failed to create event watcher: %v", err)
+		return
+	}
+	defer watcher.Stop()
+
+	logger.Println("Started watching cluster events for warnings")
+
+	for {
+		select {
+		case <-ctx.Done():
+			logger.Println("Stopped watching cluster events")
+			return
+		case event, ok := <-watcher.ResultChan():
+			if !ok {
+				logger.Println("Event watcher channel closed, restarting...")
+				// Try to restart the watcher
+				watcher, err = client.CoreV1().Events("").Watch(ctx, metav1.ListOptions{})
+				if err != nil {
+					logger.Printf("Failed to restart event watcher: %v", err)
+					return
+				}
+				continue
+			}
+
+			if event.Object == nil {
+				continue
+			}
+
+			k8sEvent, ok := event.Object.(*corev1.Event)
+			if !ok {
+				continue
+			}
+
+			// Log Warning events
+			if k8sEvent.Type == corev1.EventTypeWarning {
+				logger.Printf("[%s] %s/%s: %s - %s",
+					k8sEvent.Type,
+					k8sEvent.InvolvedObject.Namespace,
+					k8sEvent.InvolvedObject.Name,
+					k8sEvent.Reason,
+					k8sEvent.Message,
+				)
+			}
+		}
+	}
+}
+
+// watchAndLogPods watches for new pods in the cluster and streams their logs to the logger.
+// This function runs in the background and will continue until the context is cancelled.
+// It tracks which pods have already been logged to avoid duplicate log streaming.
+func watchAndLogPods(ctx context.Context, client *kubernetes.Clientset) {
+	logger := log.Default()
+
+	// Track pods we're already logging
+	loggedPods := make(map[string]bool)
+
+	// Watch for pods across all namespaces
+	watcher, err := client.CoreV1().Pods("").Watch(ctx, metav1.ListOptions{})
+	if err != nil {
+		logger.Printf("Failed to create pod watcher: %v", err)
+		return
+	}
+	defer watcher.Stop()
+
+	logger.Println("Started watching for new pods and streaming logs")
+
+	for {
+		select {
+		case <-ctx.Done():
+			logger.Println("Stopped watching pods")
+			return
+		case event, ok := <-watcher.ResultChan():
+			if !ok {
+				logger.Println("Pod watcher channel closed, restarting...")
+				// Try to restart the watcher
+				watcher, err = client.CoreV1().Pods("").Watch(ctx, metav1.ListOptions{})
+				if err != nil {
+					logger.Printf("Failed to restart pod watcher: %v", err)
+					return
+				}
+				continue
+			}
+
+			if event.Object == nil {
+				continue
+			}
+
+			pod, ok := event.Object.(*corev1.Pod)
+			if !ok {
+				continue
+			}
+
+			// Create unique key for this pod
+			podKey := fmt.Sprintf("%s/%s", pod.Namespace, pod.Name)
+
+			// Only process new pods we haven't seen before
+			if loggedPods[podKey] {
+				continue
+			}
+
+			// Wait for pod to be running before streaming logs
+			if pod.Status.Phase == corev1.PodRunning {
+				loggedPods[podKey] = true
+				logger.Printf("New pod detected: %s", podKey)
+
+				// Stream logs for each container in the pod
+				for _, container := range pod.Spec.InitContainers {
+					go streamPodContainerLogs(ctx, client, pod.Namespace, pod.Name, container.Name)
+				}
+				for _, container := range pod.Spec.Containers {
+					go streamPodContainerLogs(ctx, client, pod.Namespace, pod.Name, container.Name)
+				}
+			}
+		}
+	}
+}
+
+// streamPodContainerLogs streams logs from a specific container in a pod
+func streamPodContainerLogs(ctx context.Context, client *kubernetes.Clientset, namespace, podName, containerName string) {
+	logger := log.Default()
+
+	logOptions := &corev1.PodLogOptions{
+		Container: containerName,
+		Follow:    true,
+	}
+
+	req := client.CoreV1().Pods(namespace).GetLogs(podName, logOptions)
+	stream, err := req.Stream(ctx)
+	if err != nil {
+		logger.Printf("Failed to stream logs for %s/%s/%s: %v", namespace, podName, containerName, err)
+		return
+	}
+	// Closing the body is the only reliable way to unblock Scanner.Scan() on a
+	// follow=true stream after ctx is cancelled; otherwise the test can hang until
+	// the global timeout (e.g. arm64 CI).
+	stopCloseOnCancel := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = stream.Close()
+		case <-stopCloseOnCancel:
+			return
+		}
+	}()
+	defer func() {
+		close(stopCloseOnCancel)
+		_ = stream.Close()
+	}()
+
+	logger.Printf("Started streaming logs for %s/%s/%s", namespace, podName, containerName)
+
+	scanner := bufio.NewScanner(stream)
+	for scanner.Scan() {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			logger.Printf("[%s/%s/%s] %s", namespace, podName, containerName, scanner.Text())
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		logger.Printf("Error reading logs for %s/%s/%s: %v", namespace, podName, containerName, err)
+	}
+}

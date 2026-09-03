@@ -113,7 +113,8 @@ func (c *TestCluster) ApplyYAMLData(ctx context.Context, yamlData []byte, fieldM
 func (c *TestCluster) ApplyRemoteYAMLs(ctx context.Context, urls []string) error {
 	for _, url := range urls {
 		fmt.Printf("Applying YAML from %s\n", url)
-		_, stderr, err := c.cluster.Exec(ctx, []string{
+		p := *c.clusterProvider
+		_, stderr, err := p.exec(ctx, []string{
 			"kubectl", "apply", "--server-side", "-f", url,
 		})
 
@@ -132,14 +133,15 @@ func (c *TestCluster) ApplyLocalYAMLs(ctx context.Context, yamlFiles []string) e
 	for _, yamlFile := range yamlFiles {
 		// Copy file to container
 		containerPath := "/tmp/" + filepath.Base(yamlFile)
-		err := c.cluster.CopyFileToContainer(ctx, yamlFile, containerPath, 0o644)
+		p := *c.clusterProvider
+		err := p.copyFileToCluster(ctx, yamlFile, containerPath, 0o644)
 		if err != nil {
 			return fmt.Errorf("failed to copy YAML file %s to container: %w", yamlFile, err)
 		}
 
 		// Apply using kubectl inside the container
 		fmt.Printf("Applying YAML from %s\n", yamlFile)
-		_, stderr, err := c.cluster.Exec(ctx, []string{
+		_, stderr, err := p.exec(ctx, []string{
 			"kubectl", "apply", "--server-side", "-f", containerPath,
 		})
 		if err != nil {
