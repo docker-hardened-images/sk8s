@@ -181,33 +181,35 @@ func (c *TestCluster) HelmSettings(ctx context.Context) (*cli.EnvSettings, error
 			return nil, err
 		}
 
-		kubeConfigFile := filepath.Join(path, "kubeconfig")
-		registryConfigFile := filepath.Join(path, "registry_config.json")
-		repoConfigFile := filepath.Join(path, "repositories.yaml")
-		repoCacheDir := filepath.Join(path, "repository")
-		pluginsDir := filepath.Join(path, "plugins")
-
-		kubeConfig, err := c.cluster.GetKubeConfig(ctx)
-		if err != nil {
-			return nil, err
-		}
-
-		err = os.WriteFile(kubeConfigFile, kubeConfig, 0644)
-		if err != nil {
-			return nil, err
-		}
-
 		settings := cli.New()
 
-		settings.KubeConfig = kubeConfigFile
-		settings.RegistryConfig = registryConfigFile
-		settings.RepositoryConfig = repoConfigFile
-		settings.RepositoryCache = repoCacheDir
-		settings.PluginsDirectory = pluginsDir
+		settings.KubeConfig = filepath.Join(path, "kubeconfig")
+		settings.RegistryConfig = filepath.Join(path, "registry_config.json")
+		settings.RepositoryConfig = filepath.Join(path, "repositories.yaml")
+		settings.RepositoryCache = filepath.Join(path, "repository")
+		settings.PluginsDirectory = filepath.Join(path, "plugins")
 
 		settings.SetNamespace("default")
 
 		c.helmSettings = settings
+	}
+
+	// Rewritten on every call (not just the first) so that a source backed by short-lived
+	// credentials (e.g. AWS EKS bearer tokens, see EKSClusterProvider) refreshes the file Helm
+	// reads from disk instead of going stale partway through a long test run.
+	var kubeConfig []byte
+	var err error
+	if c.clusterProvider != nil {
+		kubeConfig, err = c.clusterProvider.getKubeConfig(ctx)
+	} else {
+		kubeConfig, err = c.cluster.GetKubeConfig(ctx)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get kubeconfig: %w", err)
+	}
+
+	if err := os.WriteFile(c.helmSettings.KubeConfig, kubeConfig, 0644); err != nil {
+		return nil, err
 	}
 
 	return c.helmSettings, nil
