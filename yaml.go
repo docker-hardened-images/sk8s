@@ -111,11 +111,21 @@ func (c *TestCluster) ApplyYAMLData(ctx context.Context, yamlData []byte, fieldM
 // ApplyRemoteYAMLs downloads and applies yamls from remote URLs using kubectl
 // no need to parse multiple "---" documents as kubectl apply handles them natively
 func (c *TestCluster) ApplyRemoteYAMLs(ctx context.Context, urls []string) error {
+	if c.clusterProvider == nil && c.cluster == nil {
+		return fmt.Errorf("ApplyRemoteYAMLs requires a local k3s container; this TestCluster was obtained via GetClusterWithProvider")
+	}
+
 	for _, url := range urls {
 		fmt.Printf("Applying YAML from %s\n", url)
-		_, stderr, err := c.cluster.Exec(ctx, []string{
-			"kubectl", "apply", "--server-side", "-f", url,
-		})
+
+		cmd := []string{"kubectl", "apply", "--server-side", "-f", url}
+		var stderr io.Reader
+		var err error
+		if c.clusterProvider != nil {
+			_, stderr, err = c.clusterProvider.exec(ctx, cmd)
+		} else {
+			_, stderr, err = c.cluster.Exec(ctx, cmd)
+		}
 
 		if err != nil {
 			return fmt.Errorf("failed to apply YAML from %s: %w (stderr: %s)", url, err, stderr)
@@ -129,19 +139,32 @@ func (c *TestCluster) ApplyRemoteYAMLs(ctx context.Context, urls []string) error
 // This is useful for CRDs and custom resources that may not be registered in the Go scheme.
 // Unlike ApplyYAMLFile, this method uses kubectl directly, which handles any resource type.
 func (c *TestCluster) ApplyLocalYAMLs(ctx context.Context, yamlFiles []string) error {
+	if c.clusterProvider == nil && c.cluster == nil {
+		return fmt.Errorf("ApplyLocalYAMLs requires a local k3s container; this TestCluster was obtained via GetClusterWithProvider")
+	}
+
 	for _, yamlFile := range yamlFiles {
 		// Copy file to container
 		containerPath := "/tmp/" + filepath.Base(yamlFile)
-		err := c.cluster.CopyFileToContainer(ctx, yamlFile, containerPath, 0o644)
+		var err error
+		if c.clusterProvider != nil {
+			err = c.clusterProvider.copyFileToCluster(ctx, yamlFile, containerPath, 0o644)
+		} else {
+			err = c.cluster.CopyFileToContainer(ctx, yamlFile, containerPath, 0o644)
+		}
 		if err != nil {
 			return fmt.Errorf("failed to copy YAML file %s to container: %w", yamlFile, err)
 		}
 
 		// Apply using kubectl inside the container
 		fmt.Printf("Applying YAML from %s\n", yamlFile)
-		_, stderr, err := c.cluster.Exec(ctx, []string{
-			"kubectl", "apply", "--server-side", "-f", containerPath,
-		})
+		cmd := []string{"kubectl", "apply", "--server-side", "-f", containerPath}
+		var stderr io.Reader
+		if c.clusterProvider != nil {
+			_, stderr, err = c.clusterProvider.exec(ctx, cmd)
+		} else {
+			_, stderr, err = c.cluster.Exec(ctx, cmd)
+		}
 		if err != nil {
 			return fmt.Errorf("failed to apply YAML from %s: %w (stderr: %s)", yamlFile, err, stderr)
 		}

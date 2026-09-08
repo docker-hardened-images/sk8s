@@ -85,6 +85,9 @@ func WithLoggingOptions(clusterWarnings bool, podLogs bool) CustomizeClusterOpti
 }
 
 type TestCluster struct {
+	// cluster is nil for clusters obtained via GetClusterWithProvider with a non-k3s
+	// ClusterProvider: there is no local container to exec into, load images into, or copy files
+	// to. Methods that require it check clusterProvider first, then guard against cluster == nil.
 	cluster       *k3s.K3sContainer
 	client        *kubernetes.Clientset
 	dynamicClient dynamic.Interface
@@ -92,6 +95,37 @@ type TestCluster struct {
 	provider      *tc.DockerProvider
 	helmSettings  *cli.EnvSettings
 	tmpDir        string
+
+	// clusterProvider is set by GetClusterWithProvider for clusters that sk8s did not create
+	// itself -- for example a real, already-running AWS EKS cluster (see EKSClusterProvider).
+	// When set, it takes over getClusterConfig, HelmSettings' kubeconfig sourcing, LoadImages,
+	// LoadImagesWithPlatform, Exec, ApplyRemoteYAMLs, and ApplyLocalYAMLs in place of the
+	// k3s-container-specific logic those otherwise use.
+	clusterProvider ClusterProvider
+}
+
+// ClusterProvider is the seam that lets GetClusterWithProvider wrap a cluster sk8s did not create
+// itself -- for example a real, already-running AWS EKS cluster (see EKSClusterProvider) -- into
+// a *TestCluster, reusing all of its cluster-agnostic helpers (WaitFor*, HelmInstall, ExecPod,
+// ...) unchanged.
+//
+// Its methods are unexported, so implementations must live inside this package. See
+// EKSClusterProvider for the pattern: real getCluster/getKubeConfig, and clear errors from the
+// rest for a cluster with no local container to exec into, load images into, or copy files onto.
+type ClusterProvider interface {
+	getCluster(t *testing.T, ctx context.Context) (*TestCluster, error)
+	getKubeConfig(ctx context.Context) ([]byte, error)
+	loadImages(ctx context.Context, images ...string) error
+	loadImagesWithPlatform(ctx context.Context, images []string, platform *ociv1.Platform) error
+	exec(ctx context.Context, cmd []string) (int, io.Reader, error)
+	copyFileToCluster(ctx context.Context, hostFilePath string, clusterFilePath string, fileMode int64) error
+}
+
+// GetClusterWithProvider builds a *TestCluster using the given ClusterProvider instead of
+// spinning up a local k3s container (see GetCluster). Use this to point sk8s's cluster-agnostic
+// helpers at an already-running cluster -- for example EKSClusterProvider, for AWS EKS.
+func GetClusterWithProvider(t *testing.T, ctx context.Context, provider ClusterProvider) (*TestCluster, error) {
+	return provider.getCluster(t, ctx)
 }
 
 func GetCluster(t *testing.T, ctx context.Context, opts ...CustomizeClusterOption) (*TestCluster, error) {
@@ -186,6 +220,9 @@ func GetCluster(t *testing.T, ctx context.Context, opts ...CustomizeClusterOptio
 	}, nil
 }
 
+// Cluster returns the underlying k3s container, or nil for a TestCluster obtained via
+// GetClusterWithProvider with a non-k3s ClusterProvider (there is no local container backing a
+// real, external cluster).
 func (c *TestCluster) Cluster() *k3s.K3sContainer {
 	return c.cluster
 }
@@ -231,6 +268,13 @@ func (c *TestCluster) ApiExtClient(ctx context.Context) (*apiextensionsclientset
 
 // Use for helm chart tests
 func (c *TestCluster) LoadImages(ctx context.Context, images ...string) error {
+	if c.clusterProvider != nil {
+		return c.clusterProvider.loadImages(ctx, images...)
+	}
+	if c.cluster == nil {
+		return fmt.Errorf("LoadImages requires a local k3s container; this TestCluster was obtained via GetClusterWithProvider, so push images to a registry the cluster can pull from instead")
+	}
+
 	for _, image := range images {
 		ref, err := reference.ParseAnyReference(image)
 		if err != nil {
@@ -284,10 +328,26 @@ func (c *TestCluster) LoadImages(ctx context.Context, images ...string) error {
 }
 
 func (c *TestCluster) LoadImagesWithPlatform(ctx context.Context, images []string, platform *ociv1.Platform) error {
+	if c.clusterProvider != nil {
+		return c.clusterProvider.loadImagesWithPlatform(ctx, images, platform)
+	}
+	if c.cluster == nil {
+		return fmt.Errorf("LoadImagesWithPlatform requires a local k3s container; this TestCluster was obtained via GetClusterWithProvider, so push images to a registry the cluster can pull from instead")
+	}
+
 	return c.cluster.LoadImagesWithOpts(ctx, images, tc.SaveDockerImageWithPlatforms(*platform))
 }
 
 func (c *TestCluster) getClusterConfig(ctx context.Context) (*rest.Config, error) {
+	if c.clusterProvider != nil {
+		kubeConfigYaml, err := c.clusterProvider.getKubeConfig(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		return clientcmd.RESTConfigFromKubeConfig(kubeConfigYaml)
+	}
+
 	return getClusterConfig(ctx, c.cluster)
 }
 
