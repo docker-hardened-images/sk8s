@@ -14,6 +14,7 @@ import (
 
 	"github.com/distribution/reference"
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/network"
 	ociv1 "github.com/opencontainers/image-spec/specs-go/v1"
 	tc "github.com/testcontainers/testcontainers-go"
@@ -128,6 +129,12 @@ func GetCluster(t *testing.T, ctx context.Context, opts ...CustomizeClusterOptio
 				"9229",  // node debugger
 			}
 
+			hc.Mounts = append(hc.Mounts, mount.Mount{
+				Type:   mount.TypeVolume,
+				Source: "sk8s-out-" + t.Name(),
+				Target: "/out",
+			})
+
 			if hc.PortBindings == nil {
 				hc.PortBindings = make(network.PortMap)
 			}
@@ -137,6 +144,20 @@ func GetCluster(t *testing.T, ctx context.Context, opts ...CustomizeClusterOptio
 					{HostIP: netip.MustParseAddr("0.0.0.0"), HostPort: p},
 				}
 			}
+		}),
+		tc.WithAdditionalLifecycleHooks(tc.ContainerLifecycleHooks{
+			PreStops: []tc.ContainerHook{
+				func(ctx context.Context, ctr tc.Container) error {
+					cmd := []string{
+						"sh", "-c", "kubectl get event --all-namespaces > /out/events.log && cp -r /var/log/pods /out",
+					}
+					_, _, err := ctr.Exec(ctx, cmd)
+					if err != nil {
+						return err
+					}
+					return nil
+				},
+			},
 		}),
 	}
 
