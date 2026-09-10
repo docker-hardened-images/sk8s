@@ -21,3 +21,17 @@ jobs:
           cache: true
       - name: Unit tests
         run: go test ./... -v -count=1 -race
+      - name: Integration tests
+        run: go test -tags=integration ./...
+      - name: Extract sk8s logs
+        run: |
+          set -eu -o pipefail
+
+          mkdir sk8s_out
+          docker volume ls -q | grep sk8s-out | xargs -I @ sh -c 'docker run --rm -v @:/data alpine tar -C /data -cf - . > sk8s_out/@.tar'
+
+      - name: Upload sk8s logs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a #v7.0.0
+        with:
+          name: sk8s_logs
+          path: sk8s_out
