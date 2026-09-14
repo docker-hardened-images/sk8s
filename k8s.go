@@ -8,9 +8,9 @@ import (
 	"io"
 	"log"
 	"net/netip"
-	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"testing"
 
 	"github.com/distribution/reference"
@@ -130,7 +130,7 @@ func GetCluster(t *testing.T, ctx context.Context, opts ...CustomizeClusterOptio
 				"9229",  // node debugger
 			}
 
-			sk8sOutName := fmt.Sprintf("sk8s-out-%s", url.PathEscape(t.Name()))
+			sk8sOutName := getOutputVolumeName(t.Name())
 			hc.Mounts = append(hc.Mounts, mount.Mount{
 				Type:   mount.TypeVolume,
 				Source: sk8sOutName,
@@ -326,6 +326,12 @@ func getClusterConfig(ctx context.Context, cluster *k3s.K3sContainer) (*rest.Con
 	}
 
 	return restcfg, nil
+}
+
+func getOutputVolumeName(testName string) string {
+	sanitize := regexp.MustCompile(`[^a-zA-Z0-9_.-]`)
+	name := sanitize.ReplaceAllString(testName, "_")
+	return "sk8s-out-" + name
 }
 
 // logClusterWarnings monitors cluster events and logs warnings
