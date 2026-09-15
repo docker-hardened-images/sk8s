@@ -83,6 +83,79 @@ func WithCustomizers(customize ...tc.ContainerCustomizer) CustomizeClusterOption
 func WithLoggingOptions(clusterWarnings bool, podLogs bool) CustomizeClusterOption
 ```
 
+### GetClusterWithProvider
+
+Wires a `*TestCluster` to an already-running cluster (for example a real AWS EKS cluster) instead
+of starting a local k3s container. It does not create, wait for, or manage the cluster's
+lifecycle -- the `ClusterProvider` you pass in owns that.
+
+```go
+type ClusterProvider interface {
+    // unexported: getCluster, getKubeConfig, loadImages, loadImagesWithPlatform, exec, copyFileToCluster
+}
+
+func GetClusterWithProvider(t *testing.T, ctx context.Context, provider ClusterProvider) (*TestCluster, error)
+```
+
+`ClusterProvider`'s methods are unexported, so implementations must live inside the `sk8s`
+package itself. `EKSClusterProvider` is the built-in one for AWS EKS:
+
+```go
+type EKSClusterProvider struct {
+    AWSConfig   aws.Config
+    ClusterName string
+}
+```
+
+**Example (AWS EKS):**
+
+```go
+cfg, err := sk8s.LoadConfig(ctx)
+cluster, err := sk8s.GetClusterWithProvider(t, ctx, &sk8s.EKSClusterProvider{
+    AWSConfig:   cfg,
+    ClusterName: "my-cluster",
+})
+```
+
+`EKSClusterProvider` does not create, wait for, or otherwise manage the cluster: `ClusterName`
+must already exist and be `ACTIVE`. Creating a real EKS cluster from scratch commonly takes 10-15
+minutes, so tests using this should target a pre-existing, already-warm cluster rather than
+provisioning one per run.
+
+A `*TestCluster` obtained this way has no local container backing it, so `LoadImages`,
+`LoadImagesWithPlatform`, `Exec`, `ApplyRemoteYAMLs`, and `ApplyLocalYAMLs` return an error instead
+of operating on a container. All other methods (Helm install/uninstall, `WaitFor*`, `ExecPod`,
+`RunJob`, ...) work the same as with a local k3s cluster.
+
+### AWS / EKS helpers
+
+Small helpers for talking to AWS EKS directly, independent of `TestCluster` (used internally by
+`EKSClusterProvider`, but also usable standalone, e.g. from a one-off script):
+
+```go
+func LoadConfig(ctx context.Context, opts ...func(*awscfg.LoadOptions) error) (aws.Config, error)
+
+type EKSClient struct{}
+func NewEKSClient(cfg aws.Config) *EKSClient
+func (c *EKSClient) DescribeCluster(ctx context.Context, name string) (*ClusterSummary, error)
+func (c *EKSClient) ListClusters(ctx context.Context) ([]string, error)
+
+func GenerateToken(ctx context.Context, cfg aws.Config, clusterName string) (token string, expiresAt time.Time, err error)
+func RESTConfig(ctx context.Context, cfg aws.Config, clusterName string) (*rest.Config, error)
+func KubeConfig(ctx context.Context, cfg aws.Config, clusterName string) (kubeConfig []byte, expiresAt time.Time, err error)
+```
+
+`LoadConfig` uses the standard AWS SDK for Go v2 default credential chain (environment variables,
+shared config/profiles including SSO, web identity / IRSA, container credentials, then EC2
+instance profile). See `eks.go` for details and IAM requirements.
+
+An opt-in Layer-1 test (`TestEKSClusterAccessible`, build tag `eks`) checks credentials + IAM +
+cluster name/region via `DescribeCluster` alone, with no Kubernetes API and no kubeconfig:
+
+```bash
+EKS_CLUSTER_NAME=helm-testing go test -tags=eks . -count=1 -v -run TestEKSClusterAccessible
+```
+
 ---
 
 ## Client Access
@@ -93,6 +166,9 @@ func (c *TestCluster) Client() *kubernetes.Clientset
 func (c *TestCluster) DynamicClient(ctx context.Context) (dynamic.Interface, error)
 func (c *TestCluster) ApiExtClient(ctx context.Context) (*apiextensionsclientset.Clientset, error)
 ```
+
+`Cluster()` returns `nil` for a `*TestCluster` obtained via `GetClusterWithProvider` with a
+non-k3s `ClusterProvider` (there is no local container backing a real, external cluster).
 
 ---
 
@@ -117,6 +193,8 @@ func (c *TestCluster) ApplyYAMLData(ctx context.Context, yamlData []byte, fieldM
 ### ApplyRemoteYAMLs
 
 Downloads and applies YAMLs from remote URLs via `kubectl apply` inside the cluster container.
+Not available for `GetClusterWithProvider` with `EKSClusterProvider` (no local container to run
+`kubectl` inside).
 
 ```go
 func (c *TestCluster) ApplyRemoteYAMLs(ctx context.Context, urls []string) error
@@ -124,7 +202,7 @@ func (c *TestCluster) ApplyRemoteYAMLs(ctx context.Context, urls []string) error
 
 ### ApplyLocalYAMLs
 
-Copies local YAML files into the cluster container and applies them via `kubectl`. Useful for CRDs and custom resources not registered in the Go scheme.
+Copies local YAML files into the cluster container and applies them via `kubectl`. Useful for CRDs and custom resources not registered in the Go scheme. Not available for `GetClusterWithProvider` with `EKSClusterProvider` (no local container to copy files into or run `kubectl` inside).
 
 ```go
 func (c *TestCluster) ApplyLocalYAMLs(ctx context.Context, yamlFiles []string) error
@@ -198,6 +276,9 @@ func ChartSourceFromUrlAndAppVersion(repoUrl string, chartName string, appVersio
 
 ## Image Loading
 
+Not available for `GetClusterWithProvider` with `EKSClusterProvider` (no local container to
+import images into); push images to a registry the cluster can pull from instead.
+
 ```go
 func (c *TestCluster) LoadImages(ctx context.Context, images ...string) error
 func (c *TestCluster) LoadImagesWithPlatform(ctx context.Context, images []string, platform *ociv1.Platform) error
@@ -209,7 +290,8 @@ func (c *TestCluster) LoadImagesWithPlatform(ctx context.Context, images []strin
 
 ### Exec
 
-Executes a command in the K3s container itself.
+Executes a command in the K3s container itself. Not available for `GetClusterWithProvider` with
+`EKSClusterProvider`; use `ExecPod` or `RunJob` to run commands against a real cluster instead.
 
 ```go
 func (c *TestCluster) Exec(ctx context.Context, cmd []string, options ...exec.ProcessOption) (int, io.Reader, error)

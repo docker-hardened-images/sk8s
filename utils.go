@@ -21,6 +21,13 @@ import (
 )
 
 func (c *TestCluster) Exec(ctx context.Context, cmd []string, options ...exec.ProcessOption) (int, io.Reader, error) {
+	if c.clusterProvider != nil {
+		return c.clusterProvider.exec(ctx, cmd)
+	}
+	if c.cluster == nil {
+		return 0, nil, fmt.Errorf("Exec requires a local k3s container; this TestCluster was obtained via GetClusterWithProvider, so use ExecPod or RunJob instead")
+	}
+
 	return c.cluster.Exec(ctx, cmd, options...)
 }
 
