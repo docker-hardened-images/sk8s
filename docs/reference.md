@@ -20,7 +20,7 @@ type ClusterProvider interface {
     getKubeConfig(ctx context.Context) ([]byte, error)
     loadImages(ctx context.Context, images ...string) error
     loadImagesWithPlatform(ctx context.Context, images []string, platform *ociv1.Platform) error
-    exec(ctx context.Context, cmd []string) (int, io.Reader, error)
+    exec(ctx context.Context, cmd []string, opts ...CustomizeExecOption) (int, io.Reader, error)
     copyFileToCluster(ctx context.Context, hostFilePath string, clusterFilePath string, fileMode int64) error
     copyFileFromCluster(ctx context.Context, clusterFilePath string) (io.ReadCloser, error)
 }
@@ -298,7 +298,14 @@ require.NoError(t, err)
 Executes a command in the K3s container itself.
 
 ```go
-func (c *TestCluster) Exec(ctx context.Context, cmd []string, options ...exec.ProcessOption) (int, io.Reader, error)
+func (c *TestCluster) Exec(ctx context.Context, cmd []string, opts ...CustomizeExecOption) (int, io.Reader, error)
+```
+
+Optional `CustomizeExecOption` values adjust how the command runs:
+
+```go
+// Returns stdout and stderr as a single stream with stream framing headers stripped. Off by default.
+func WithMultiplexed() CustomizeExecOption
 ```
 
 ### ExecPod

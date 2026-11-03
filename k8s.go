@@ -33,7 +33,7 @@ type ClusterProvider interface {
 	getKubeConfig(ctx context.Context) ([]byte, error)
 	loadImages(ctx context.Context, images ...string) error
 	loadImagesWithPlatform(ctx context.Context, images []string, platform *ociv1.Platform) error
-	exec(ctx context.Context, cmd []string) (int, io.Reader, error)
+	exec(ctx context.Context, cmd []string, opts ...CustomizeExecOption) (int, io.Reader, error)
 	copyFileToCluster(ctx context.Context, hostFilePath string, clusterFilePath string, fileMode int64) error
 	copyFileFromCluster(ctx context.Context, clusterFilePath string) (io.ReadCloser, error)
 }
