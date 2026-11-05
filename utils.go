@@ -19,8 +19,37 @@ import (
 	"k8s.io/client-go/tools/remotecommand"
 )
 
-func (c *TestCluster) Exec(ctx context.Context, cmd []string) (int, io.Reader, error) {
-	return c.clusterProvider.exec(ctx, cmd)
+// ExecOptions holds provider-independent settings for executing a command in the cluster.
+type ExecOptions struct {
+	multiplexed bool
+}
+
+type CustomizeExecOption func(opts *ExecOptions)
+
+func (opt CustomizeExecOption) Customize(opts *ExecOptions) {
+	opt(opts)
+}
+
+// WithMultiplexed makes the command's stdout and stderr be returned as a single
+// stream, with any stream framing headers stripped. Without it, the output is
+// not multiplexed.
+func WithMultiplexed() CustomizeExecOption {
+	return func(opts *ExecOptions) {
+		opts.multiplexed = true
+	}
+}
+
+func newExecOptions(opts ...CustomizeExecOption) *ExecOptions {
+	execOpts := &ExecOptions{}
+	for _, opt := range opts {
+		opt.Customize(execOpts)
+	}
+
+	return execOpts
+}
+
+func (c *TestCluster) Exec(ctx context.Context, cmd []string, opts ...CustomizeExecOption) (int, io.Reader, error) {
+	return c.clusterProvider.exec(ctx, cmd, opts...)
 }
 
 func (c *TestCluster) ExecPod(ctx context.Context, namespace string, pod string, cmd []string) (bytes.Buffer, bytes.Buffer, error) {

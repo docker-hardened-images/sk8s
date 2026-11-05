@@ -19,6 +19,7 @@ import (
 	"github.com/moby/moby/api/types/network"
 	ociv1 "github.com/opencontainers/image-spec/specs-go/v1"
 	tc "github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/exec"
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -294,8 +295,15 @@ func (c *K3sClusterProvider) loadImagesWithPlatform(ctx context.Context, images 
 	return c.cluster.LoadImagesWithOpts(ctx, images, tc.SaveDockerImageWithPlatforms(*platform))
 }
 
-func (c *K3sClusterProvider) exec(ctx context.Context, cmd []string) (int, io.Reader, error) {
-	return c.cluster.Exec(ctx, cmd)
+func (c *K3sClusterProvider) exec(ctx context.Context, cmd []string, opts ...CustomizeExecOption) (int, io.Reader, error) {
+	execOpts := newExecOptions(opts...)
+
+	var processOpts []exec.ProcessOption
+	if execOpts.multiplexed {
+		processOpts = append(processOpts, exec.Multiplexed())
+	}
+
+	return c.cluster.Exec(ctx, cmd, processOpts...)
 }
 
 func (c *K3sClusterProvider) copyFileToCluster(ctx context.Context, hostFilePath string, clusterFilePath string, fileMode int64) error {
