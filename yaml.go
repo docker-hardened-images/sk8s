@@ -141,7 +141,7 @@ func (c *TestCluster) ApplyLocalYAMLs(ctx context.Context, yamlFiles []string) e
 	for _, yamlFile := range yamlFiles {
 		// Copy file to container
 		containerPath := "/tmp/" + filepath.Base(yamlFile)
-		err := c.clusterProvider.copyFileToCluster(ctx, yamlFile, containerPath, 0o644)
+		err := c.CopyFileToCluster(ctx, yamlFile, containerPath, 0o644)
 		if err != nil {
 			return fmt.Errorf("failed to copy YAML file %s to container: %w", yamlFile, err)
 		}

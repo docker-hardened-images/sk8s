@@ -110,7 +110,7 @@ func (p *K3sClusterProvider) Cluster() *k3s.K3sContainer {
 	return p.cluster
 }
 
-func (p *K3sClusterProvider) getCluster(t *testing.T, ctx context.Context) (*TestCluster, error) {
+func (p *K3sClusterProvider) GetCluster(t *testing.T, ctx context.Context) (*TestCluster, error) {
 	options := ClusterOptions{
 		image:  defaultImage,
 		config: DefaultConfig,
@@ -195,7 +195,7 @@ func (p *K3sClusterProvider) getCluster(t *testing.T, ctx context.Context) (*Tes
 	}
 	p.cluster = k3sContainer
 
-	kubeConfigYaml, err := p.getKubeConfig(ctx)
+	kubeConfigYaml, err := p.GetKubeConfig(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -229,7 +229,7 @@ func (p *K3sClusterProvider) getCluster(t *testing.T, ctx context.Context) (*Tes
 	return &cluster, nil
 }
 
-func (c *K3sClusterProvider) getKubeConfig(ctx context.Context) ([]byte, error) {
+func (c *K3sClusterProvider) GetKubeConfig(ctx context.Context) ([]byte, error) {
 	kubeConfigYaml, err := c.cluster.GetKubeConfig(ctx)
 	if err != nil {
 		return nil, err
@@ -238,7 +238,7 @@ func (c *K3sClusterProvider) getKubeConfig(ctx context.Context) ([]byte, error) 
 }
 
 // Use for helm chart tests
-func (c *K3sClusterProvider) loadImages(ctx context.Context, images ...string) error {
+func (c *K3sClusterProvider) LoadImages(ctx context.Context, images ...string) error {
 	for _, image := range images {
 		ref, err := reference.ParseAnyReference(image)
 		if err != nil {
@@ -291,11 +291,11 @@ func (c *K3sClusterProvider) loadImages(ctx context.Context, images ...string) e
 	return nil
 }
 
-func (c *K3sClusterProvider) loadImagesWithPlatform(ctx context.Context, images []string, platform *ociv1.Platform) error {
+func (c *K3sClusterProvider) LoadImagesWithPlatform(ctx context.Context, images []string, platform *ociv1.Platform) error {
 	return c.cluster.LoadImagesWithOpts(ctx, images, tc.SaveDockerImageWithPlatforms(*platform))
 }
 
-func (c *K3sClusterProvider) exec(ctx context.Context, cmd []string, opts ...CustomizeExecOption) (int, io.Reader, error) {
+func (c *K3sClusterProvider) Exec(ctx context.Context, cmd []string, opts ...CustomizeExecOption) (int, io.Reader, error) {
 	execOpts := newExecOptions(opts...)
 
 	var processOpts []exec.ProcessOption
@@ -306,11 +306,11 @@ func (c *K3sClusterProvider) exec(ctx context.Context, cmd []string, opts ...Cus
 	return c.cluster.Exec(ctx, cmd, processOpts...)
 }
 
-func (c *K3sClusterProvider) copyFileToCluster(ctx context.Context, hostFilePath string, clusterFilePath string, fileMode int64) error {
+func (c *K3sClusterProvider) CopyFileToCluster(ctx context.Context, hostFilePath string, clusterFilePath string, fileMode int64) error {
 	return c.cluster.CopyFileToContainer(ctx, hostFilePath, clusterFilePath, fileMode)
 }
 
-func (c *K3sClusterProvider) copyFileFromCluster(ctx context.Context, clusterFilePath string) (io.ReadCloser, error) {
+func (c *K3sClusterProvider) CopyFileFromCluster(ctx context.Context, clusterFilePath string) (io.ReadCloser, error) {
 	return c.cluster.CopyFileFromContainer(ctx, clusterFilePath)
 }
 

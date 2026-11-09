@@ -29,13 +29,13 @@ type TestCluster struct {
 }
 
 type ClusterProvider interface {
-	getCluster(t *testing.T, ctx context.Context) (*TestCluster, error)
-	getKubeConfig(ctx context.Context) ([]byte, error)
-	loadImages(ctx context.Context, images ...string) error
-	loadImagesWithPlatform(ctx context.Context, images []string, platform *ociv1.Platform) error
-	exec(ctx context.Context, cmd []string, opts ...CustomizeExecOption) (int, io.Reader, error)
-	copyFileToCluster(ctx context.Context, hostFilePath string, clusterFilePath string, fileMode int64) error
-	copyFileFromCluster(ctx context.Context, clusterFilePath string) (io.ReadCloser, error)
+	GetCluster(t *testing.T, ctx context.Context) (*TestCluster, error)
+	GetKubeConfig(ctx context.Context) ([]byte, error)
+	LoadImages(ctx context.Context, images ...string) error
+	LoadImagesWithPlatform(ctx context.Context, images []string, platform *ociv1.Platform) error
+	Exec(ctx context.Context, cmd []string, opts ...CustomizeExecOption) (int, io.Reader, error)
+	CopyFileToCluster(ctx context.Context, hostFilePath string, clusterFilePath string, fileMode int64) error
+	CopyFileFromCluster(ctx context.Context, clusterFilePath string) (io.ReadCloser, error)
 }
 
 func GetCluster(t *testing.T, ctx context.Context) (*TestCluster, error) {
@@ -43,7 +43,7 @@ func GetCluster(t *testing.T, ctx context.Context) (*TestCluster, error) {
 }
 
 func GetClusterWithProvider(t *testing.T, ctx context.Context, provider ClusterProvider) (*TestCluster, error) {
-	cluster, err := provider.getCluster(t, ctx)
+	cluster, err := provider.GetCluster(t, ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -96,27 +96,31 @@ func (c *TestCluster) ApiExtClient(ctx context.Context) (*apiextensionsclientset
 }
 
 func (c *TestCluster) LoadImages(ctx context.Context, images ...string) error {
-	return c.clusterProvider.loadImages(ctx, images...)
+	return c.clusterProvider.LoadImages(ctx, images...)
 }
 
 func (c *TestCluster) LoadImagesWithPlatform(ctx context.Context, images []string, platform *ociv1.Platform) error {
-	return c.clusterProvider.loadImagesWithPlatform(ctx, images, platform)
+	return c.clusterProvider.LoadImagesWithPlatform(ctx, images, platform)
+}
+
+func (c *TestCluster) Exec(ctx context.Context, cmd []string, opts ...CustomizeExecOption) (int, io.Reader, error) {
+	return c.clusterProvider.Exec(ctx, cmd, opts...)
 }
 
 func (c *TestCluster) CopyFileToCluster(ctx context.Context, hostFilePath string, clusterFilePath string, fileMode int64) error {
-	return c.clusterProvider.copyFileToCluster(ctx, hostFilePath, clusterFilePath, fileMode)
+	return c.clusterProvider.CopyFileToCluster(ctx, hostFilePath, clusterFilePath, fileMode)
 }
 
 func (c *TestCluster) CopyFileFromCluster(ctx context.Context, clusterFilePath string) (io.ReadCloser, error) {
-	return c.clusterProvider.copyFileFromCluster(ctx, clusterFilePath)
+	return c.clusterProvider.CopyFileFromCluster(ctx, clusterFilePath)
 }
 
 func (c *TestCluster) GetKubeConfig(ctx context.Context) ([]byte, error) {
-	return c.clusterProvider.getKubeConfig(ctx)
+	return c.clusterProvider.GetKubeConfig(ctx)
 }
 
 func (c *TestCluster) GetClusterConfig(ctx context.Context) (*rest.Config, error) {
-	kubeConfigYaml, err := c.clusterProvider.getKubeConfig(ctx)
+	kubeConfigYaml, err := c.clusterProvider.GetKubeConfig(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -130,4 +134,33 @@ func getClusterConfig(kubeConfigYaml []byte) (*rest.Config, error) {
 	}
 
 	return restcfg, nil
+}
+
+// ExecOptions holds provider-independent settings for executing a command in the cluster.
+type ExecOptions struct {
+	multiplexed bool
+}
+
+type CustomizeExecOption func(opts *ExecOptions)
+
+func (opt CustomizeExecOption) Customize(opts *ExecOptions) {
+	opt(opts)
+}
+
+// WithMultiplexed makes the command's stdout and stderr be returned as a single
+// stream, with any stream framing headers stripped. Without it, the output is
+// not multiplexed.
+func WithMultiplexed() CustomizeExecOption {
+	return func(opts *ExecOptions) {
+		opts.multiplexed = true
+	}
+}
+
+func newExecOptions(opts ...CustomizeExecOption) *ExecOptions {
+	execOpts := &ExecOptions{}
+	for _, opt := range opts {
+		opt.Customize(execOpts)
+	}
+
+	return execOpts
 }
